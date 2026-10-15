@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # iPhone-spoofed organic traffic for gardengar.com
-# - Rotates between multiple iPhone models every run
-# - Real organic Google click + multi-page engagement
-# - No forced country / timezone / locale
-# - Appears as iOS / iPhone traffic in GA4 + Search Console
+# - Rotates multiple iPhone models
+# - Real organic Google click
+# - Multi-page engagement (safe scroll + reliable taps)
 set -euo pipefail
 
 ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
@@ -66,27 +65,22 @@ ensure_root() {
   return 1
 }
 
-# ---------- Random iPhone profile ----------
-# These are the most common models that appear in Search Console / GA4
 pick_iphone_profile() {
   local profiles=(
-    "iPhone15,2|iPhone 14 Pro|iPhone|390x844|3|17_0"
-    "iPhone15,3|iPhone 14 Pro Max|iPhone|430x932|3|17_0"
-    "iPhone14,5|iPhone 13|iPhone|390x844|3|16_6"
-    "iPhone14,2|iPhone 13 Pro|iPhone|390x844|3|16_6"
-    "iPhone13,2|iPhone 12|iPhone|390x844|3|16_5"
-    "iPhone16,1|iPhone 15 Pro|iPhone|393x852|3|17_1"
-    "iPhone16,2|iPhone 15 Pro Max|iPhone|430x932|3|17_1"
-    "iPhone15,4|iPhone 15|iPhone|393x852|3|17_0"
-    "iPhone14,7|iPhone 14|iPhone|390x844|3|16_6"
+    "iPhone15,2|iPhone 14 Pro|390x844|3|17_0"
+    "iPhone15,3|iPhone 14 Pro Max|430x932|3|17_0"
+    "iPhone14,5|iPhone 13|390x844|3|16_6"
+    "iPhone14,2|iPhone 13 Pro|390x844|3|16_6"
+    "iPhone13,2|iPhone 12|390x844|3|16_5"
+    "iPhone16,1|iPhone 15 Pro|393x852|3|17_1"
+    "iPhone16,2|iPhone 15 Pro Max|430x932|3|17_1"
+    "iPhone15,4|iPhone 15|393x852|3|17_0"
+    "iPhone14,7|iPhone 14|390x844|3|16_6"
   )
   local choice="${profiles[RANDOM % ${#profiles[@]}]}"
-  IFS='|' read -r IPHONE_MODEL IPHONE_NAME IPHONE_FAMILY VIEWPORT DPR IOS_VER <<< "$choice"
-
-  # Realistic User-Agent
+  IFS='|' read -r IPHONE_MODEL IPHONE_NAME VIEWPORT DPR IOS_VER <<< "$choice"
   IPHONE_UA="Mozilla/5.0 (iPhone; CPU iPhone OS ${IOS_VER//_/_} like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-
-  log "Selected iPhone profile: $IPHONE_NAME ($IPHONE_MODEL)  iOS $IOS_VER  viewport $VIEWPORT"
+  log "Selected iPhone profile: $IPHONE_NAME ($IPHONE_MODEL)  iOS $IOS_VER"
 }
 
 dump_identity() {
@@ -125,12 +119,6 @@ skip_chrome_welcome() {
   adb shell pm grant "$CHROME_PKG" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
   adb shell am force-stop "$CHROME_PKG" >/dev/null 2>&1 || true
   log "Chrome first-run flags written"
-}
-
-# Set Chrome to use the iPhone User-Agent via command line + CDP later
-apply_iphone_ua() {
-  # We will also override via CDP Network.setUserAgentOverride for best effect
-  log "iPhone UA prepared: $IPHONE_NAME"
 }
 
 dismiss_chrome_sheets() {
@@ -233,13 +221,10 @@ settle_device() {
   adb shell settings put secure lockscreen.disabled 1 >/dev/null || true
   adb shell locksettings set-disabled true >/dev/null 2>&1 || true
   adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
-  # Keep a tall mobile viewport
   adb_sh wm size 1080x2340 || true
   adb_sh wm density 420 || true
 }
 
-# ---------------------------------------------------------------------------
-# Single process: set iPhone UA → organic click → multi-page engagement
 # ---------------------------------------------------------------------------
 do_organic_and_engage() {
   python3 -m pip install -q websocket-client --break-system-packages >/dev/null 2>&1 \
@@ -248,7 +233,7 @@ do_organic_and_engage() {
   adb forward --remove tcp:9222 >/dev/null 2>&1 || true
   adb forward tcp:9222 localabstract:chrome_devtools_remote >/dev/null 2>&1 || true
 
-  export IPHONE_UA IPHONE_NAME IPHONE_MODEL VIEWPORT
+  export IPHONE_UA IPHONE_NAME
   RESULT_HOST="$RESULT_HOST" RESULT_TEXT="$RESULT_TEXT" ARTIFACTS="$ARTIFACTS" \
   IPHONE_UA="$IPHONE_UA" IPHONE_NAME="$IPHONE_NAME" python3 - <<'PY'
 import json, os, sys, time, random, urllib.request, subprocess
@@ -262,7 +247,7 @@ IPHONE_NAME = os.environ.get("IPHONE_NAME", "iPhone")
 
 NUM_PAGES = random.randint(4, 5)
 MIN_DWELL = 35
-MAX_DWELL = 80
+MAX_DWELL = 75
 
 def get_tabs():
     with urllib.request.urlopen("http://127.0.0.1:9222/json", timeout=8) as r:
@@ -335,35 +320,15 @@ cdp("Page.enable")
 cdp("Runtime.enable")
 cdp("Network.enable")
 
-# ----- Apply iPhone User-Agent + Client Hints -----
-print("Applying iPhone User-Agent override...", flush=True)
+# Apply iPhone UA
+print("Applying iPhone User-Agent...", flush=True)
 cdp("Network.setUserAgentOverride",
     userAgent=IPHONE_UA,
     platform="iPhone",
-    acceptLanguage="en-US,en;q=0.9",
-    userAgentMetadata={
-        "brands": [
-            {"brand": "Not/A)Brand", "version": "8"},
-            {"brand": "Chromium", "version": "120"},
-            {"brand": "Google Chrome", "version": "120"}
-        ],
-        "fullVersionList": [
-            {"brand": "Not/A)Brand", "version": "10.0.0.4"},
-            {"brand": "Chromium", "version": "120.0.6099.71"},
-            {"brand": "Google Chrome", "version": "120.0.6099.71"}
-        ],
-        "platform": "iOS",
-        "platformVersion": "17.0",
-        "architecture": "",
-        "model": IPHONE_NAME,
-        "mobile": True,
-        "bitness": "",
-        "wow64": False
-    }
-)
+    acceptLanguage="en-US,en;q=0.9")
 print("iPhone UA applied:", IPHONE_NAME, flush=True)
 
-# Optional exact query
+# Try exact query if Google corrected it
 js("""(() => {
   const links = [...document.querySelectorAll('a')];
   for (const a of links) {
@@ -454,7 +419,6 @@ for attempt in range(35):
                 tab = t
                 ws = websocket.create_connection(tab["webSocketDebuggerUrl"], timeout=120, suppress_origin=True, ping_interval=12, ping_timeout=8)
                 cdp("Page.enable"); cdp("Runtime.enable"); cdp("Network.enable")
-                # Re-apply UA on new tab
                 cdp("Network.setUserAgentOverride", userAgent=IPHONE_UA, platform="iPhone")
                 success = True
                 break
@@ -470,6 +434,7 @@ if not success:
     print("FAILED organic click", flush=True)
     sys.exit(1)
 
+time.sleep(3)
 subprocess.run(["adb","exec-out","screencap","-p"], stdout=open(os.path.join(ARTIFACTS,"03-organic-landed.png"),"wb"), check=False)
 time.sleep(2)
 subprocess.run(["adb","exec-out","screencap","-p"], stdout=open(os.path.join(ARTIFACTS,"04-organic-settled.png"),"wb"), check=False)
@@ -485,19 +450,48 @@ def page_dims():
     }))()""") or "{}")
 
 def smooth_scroll_random(sec):
+    """Safe version – never sleeps negative"""
     end = time.time() + sec
     count = 0
-    while time.time() < end:
+    while True:
+        remaining = end - time.time()
+        if remaining <= 0.4:
+            break
+
         d = page_dims()
-        H, W = d.get("H",800), d.get("W",400)
-        maxY, curY = d.get("maxY",0), d.get("scrollY",0)
-        direction = -1 if curY < 40 else (1 if curY >= maxY-30 else (-1 if random.random()<0.75 else 1))
-        dist = random.randint(int(H*0.22), int(H*0.48))
-        cdp("Input.synthesizeScrollGesture",
-            x=int(W*random.uniform(0.3,0.7)), y=int(H*random.uniform(0.4,0.7)),
-            yDistance=direction*dist, speed=random.randint(280,580), gestureSourceType="touch")
-        count += 1
-        time.sleep(min(random.uniform(1.8,4.2), end-time.time()))
+        H = d.get("H", 800)
+        W = d.get("W", 400)
+        maxY = d.get("maxY", 0)
+        curY = d.get("scrollY", 0)
+
+        if curY >= maxY - 30 and maxY > 0:
+            direction = 1
+        elif curY < 40:
+            direction = -1
+        else:
+            direction = -1 if random.random() < 0.75 else 1
+
+        dist = random.randint(int(H * 0.22), int(H * 0.48))
+        speed = random.randint(280, 580)
+        x = int(W * random.uniform(0.30, 0.70))
+        y = int(H * random.uniform(0.40, 0.70))
+
+        try:
+            cdp("Input.synthesizeScrollGesture",
+                x=x, y=y,
+                yDistance=direction * dist,
+                speed=speed,
+                gestureSourceType="touch")
+            count += 1
+        except Exception as e:
+            print(f"  scroll error: {e}", flush=True)
+
+        pause = random.uniform(1.6, 3.8)
+        remaining = end - time.time()
+        if remaining <= 0:
+            break
+        time.sleep(min(pause, remaining))
+
     print(f"  {count} scrolls", flush=True)
 
 def find_good_links():
@@ -506,7 +500,7 @@ def find_good_links():
         const bad = ['/about','/contact','/privacy','/terms','/licensing','/cookie'];
         const vis = e => {
             const r = e.getBoundingClientRect(), st = getComputedStyle(e);
-            return r.width>12 && r.height>12 && st.visibility!=='hidden' && st.display!=='none';
+            return r.width > 12 && r.height > 12 && st.visibility !== 'hidden' && st.display !== 'none';
         };
         const links = [...document.querySelectorAll('a[href]')].filter(a => {
             try {
@@ -519,19 +513,21 @@ def find_good_links():
             } catch(e){return false;}
         });
         const score = a => {
-            let s=0; const t=(a.innerText||'').trim().toLowerCase(); const href=a.href.toLowerCase();
-            if (/\\/20[0-9]{2}\\//.test(href) || /\\/blog\\//.test(href)) s+=8;
-            if (a.querySelector('h1,h2,h3,h4')) s+=5;
-            if (t.length>25 && t.length<110) s+=3;
-            if (/\\/category\\//.test(href)) s+=4;
+            let s = 0;
+            const t = (a.innerText || '').trim().toLowerCase();
+            const href = a.href.toLowerCase();
+            if (/\\/20[0-9]{2}\\//.test(href) || /\\/blog\\//.test(href)) s += 8;
+            if (a.querySelector('h1,h2,h3,h4')) s += 5;
+            if (t.length > 25 && t.length < 110) s += 3;
+            if (/\\/category\\//.test(href)) s += 4;
             return s;
         };
-        links.sort((x,y)=>score(y)-score(x));
-        return JSON.stringify(links.slice(0,18).map(a=>{
-            const t=a.querySelector('h1,h2,h3,h4')||a;
-            const r=t.getBoundingClientRect();
-            return {text:(t.innerText||'').trim().slice(0,80), href:a.href,
-                    x:r.left+r.width/2, y:r.top+r.height/2, score:score(a)};
+        links.sort((x,y) => score(y) - score(x));
+        return JSON.stringify(links.slice(0, 18).map(a => {
+            const t = a.querySelector('h1,h2,h3,h4') || a;
+            const r = t.getBoundingClientRect();
+            return {text: (t.innerText||'').trim().slice(0,80), href: a.href,
+                    x: r.left+r.width/2, y: r.top+r.height/2, score: score(a)};
         }));
     })()""")
     try: return json.loads(raw or "[]")
@@ -541,48 +537,58 @@ visited = set()
 current = js("location.href") or ""
 print("starting on:", current, flush=True)
 
-# If landed on about, go home first
+# If landed on about, go home
 if "/about" in current.lower():
     cdp("Page.navigate", url="https://gardengar.com/")
     time.sleep(4)
 
-for page_num in range(1, NUM_PAGES+1):
+for page_num in range(1, NUM_PAGES + 1):
     print(f"\n===== PAGE {page_num}/{NUM_PAGES} =====", flush=True)
     dwell = random.randint(MIN_DWELL, MAX_DWELL)
     print(f"  dwell ~{dwell}s", flush=True)
     smooth_scroll_random(dwell)
 
     try:
-        name = f"0{4+page_num}-page{page_num}.png"
+        name = f"0{4 + page_num}-page{page_num}.png"
         subprocess.run(["adb","exec-out","screencap","-p"],
-                       stdout=open(os.path.join(ARTIFACTS,name),"wb"), check=False)
+                       stdout=open(os.path.join(ARTIFACTS, name), "wb"), check=False)
     except: pass
 
-    if page_num >= NUM_PAGES: break
+    if page_num >= NUM_PAGES:
+        break
 
     links = find_good_links()
-    candidates = [L for L in links if L["href"] not in visited and L.get("score",0) >= 3]
+    candidates = [L for L in links if L["href"] not in visited and L.get("score", 0) >= 3]
     if not candidates:
         candidates = [L for L in links if L["href"] not in visited]
     if not candidates:
-        print("  no more links", flush=True)
+        print("  no more good links", flush=True)
         break
 
-    choice = random.choice(sorted(candidates, key=lambda x: x.get("score",0), reverse=True)[:6])
+    choice = random.choice(sorted(candidates, key=lambda x: x.get("score", 0), reverse=True)[:6])
     visited.add(choice["href"])
-    print(f"  tap '{choice['text'][:50]}'", flush=True)
+    print(f"  tap '{choice['text'][:55]}'", flush=True)
+
+    old_url = (js("location.href") or "").rstrip("/")
     cdp("Input.synthesizeTapGesture", x=choice["x"], y=choice["y"])
     time.sleep(4.5)
+
+    new_url = (js("location.href") or "").rstrip("/")
+    if new_url == old_url and choice["href"] not in new_url:
+        print("  tap did not navigate – soft navigate", flush=True)
+        cdp("Page.navigate", url=choice["href"])
+        time.sleep(3.5)
+
     print("  now:", js("location.href"), flush=True)
 
 print("\n===== FINAL =====", flush=True)
-smooth_scroll_random(random.randint(20,40))
+smooth_scroll_random(random.randint(18, 35))
 subprocess.run(["adb","exec-out","screencap","-p"],
-               stdout=open(os.path.join(ARTIFACTS,"09-final.png"),"wb"), check=False)
+               stdout=open(os.path.join(ARTIFACTS, "09-final.png"), "wb"), check=False)
 
 print("visited:", list(visited), flush=True)
 ws.close()
-print("DONE – iPhone-spoofed organic + engagement finished", flush=True)
+print("DONE – iPhone organic + engagement finished", flush=True)
 PY
 }
 
@@ -593,13 +599,11 @@ wait_for_boot
 if ensure_root; then HAVE_ROOT=1; fi
 settle_device
 
-# Pick a random iPhone every run
 pick_iphone_profile
 dump_identity
 
 resolve_chrome
 skip_chrome_welcome
-apply_iphone_ua
 
 open_url "$TARGET_URL"
 sleep 6
