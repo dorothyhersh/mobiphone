@@ -45,7 +45,7 @@ permissions:
   actions: write          # needed to dispatch the next chained run
 concurrency:
   # Allow chained runs to queue; cancel only duplicate manual pushes
-  group: samsung-native-capture-${{ github.event.inputs.chain_index || '1' }}
+  group: iphone-native-captur-${{ github.event.inputs.chain_index || '1' }}
   cancel-in-progress: false
 jobs:
   capture:
