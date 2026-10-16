@@ -9,20 +9,25 @@
 # (locale, timezone, CSC country codes).
 #
 # Schedule: starts a chain once per day; each successful run immediately
-# dispatches the next until 20 runs complete in that 24h window.
+# dispatches the next until max_runs complete in that 24h window.
 #
 # Use google_apis (userdebug), not google_apis_playstore.
 name: Samsung Chrome newscredo capture
 on:
   # Kick off the daily chain (UTC). Adjust hour if you prefer local time.
   schedule:
-    - cron: "0 6 * * *"          # 06:00 UTC every day → starts chain run 1/20
+    - cron: "0 6 * * *"          # 06:00 UTC every day → starts chain run 1/max
   workflow_dispatch:
     inputs:
       chain_index:
-        description: "Chain index within the daily batch (1–20). Leave 1 to start a full batch."
+        description: "Chain index within the daily batch (1–max_runs). Leave 1 to start a full batch."
         required: false
         default: "1"
+        type: string
+      max_runs:
+        description: "How many times to run in this 24h chain (1–50)"
+        required: false
+        default: "20"            # ← change this default if you want (e.g. 10, 20, 30, 50)
         type: string
   # Allow the job to re-trigger itself for chaining
   workflow_call:
@@ -30,6 +35,10 @@ on:
       chain_index:
         required: false
         default: "1"
+        type: string
+      max_runs:
+        required: false
+        default: "20"
         type: string
 permissions:
   contents: read
@@ -40,38 +49,55 @@ concurrency:
   cancel-in-progress: false
 jobs:
   capture:
-    name: Galaxy S24 Ultra · run ${{ github.event.inputs.chain_index || '1' }}/20
+    name: Galaxy S24 Ultra · run ${{ github.event.inputs.chain_index || '1' }}/${{ github.event.inputs.max_runs || '20' }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
     outputs:
       chain_index: ${{ steps.chain.outputs.index }}
       next_index: ${{ steps.chain.outputs.next }}
+      max_runs: ${{ steps.chain.outputs.max }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Resolve chain index
+
+      - name: Resolve chain index & max runs
         id: chain
         run: |
           IDX="${{ github.event.inputs.chain_index || '1' }}"
-          # clamp 1–20
-          if ! [[ "$IDX" =~ ^([1-9]|1[0-9]|20)$ ]]; then IDX=1; fi
+          MAX="${{ github.event.inputs.max_runs || '20' }}"
+
+          # Clamp max_runs to 1–50
+          if ! [[ "$MAX" =~ ^[0-9]+$ ]] || [ "$MAX" -lt 1 ]; then MAX=1; fi
+          if [ "$MAX" -gt 50 ]; then MAX=50; fi
+
+          # Clamp chain index to 1–MAX
+          if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [ "$IDX" -lt 1 ]; then IDX=1; fi
+          if [ "$IDX" -gt "$MAX" ]; then IDX=1; fi
+
           NEXT=$((IDX + 1))
+
           echo "index=$IDX"   >> "$GITHUB_OUTPUT"
           echo "next=$NEXT"   >> "$GITHUB_OUTPUT"
-          echo "Chain index: $IDX / 20  (next would be $NEXT)"
+          echo "max=$MAX"     >> "$GITHUB_OUTPUT"
+
+          echo "Chain index: $IDX / $MAX  (next would be $NEXT)"
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
+
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
       - name: Make emulator scripts executable
         run: chmod +x scripts/emulator/*.sh
+
       - name: Boot Samsung-spoofed emulator and capture
         uses: reactivecircus/android-emulator-runner@v2
         env:
@@ -119,6 +145,7 @@ jobs:
             -prop ro.build.characteristics=phone
           pre-emulator-launch-script: bash scripts/emulator/patch-avd.sh
           script: bash scripts/emulator/spoof-and-capture.sh
+
       - name: Upload screenshot and identity dump
         if: always()
         uses: actions/upload-artifact@v4
@@ -127,19 +154,24 @@ jobs:
           path: artifacts/
           if-no-files-found: warn
           retention-days: 14
-      # Instantly start the next run in the chain (1→2→…→20)
+
+      # Instantly start the next run in the chain (1 → 2 → … → max_runs)
       - name: Dispatch next chained run
-        if: success() && steps.chain.outputs.index < 20
+        if: success() && steps.chain.outputs.index < steps.chain.outputs.max
         uses: actions/github-script@v7
         with:
           script: |
             const next = '${{ steps.chain.outputs.next }}';
-            console.log(`Chain ${next}/20 — dispatching immediately…`);
+            const max  = '${{ steps.chain.outputs.max }}';
+            console.log(`Chain ${next}/${max} — dispatching immediately…`);
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'iphone-native-capture.yml',
+              workflow_id: 'iphone-native-capture.yml',   # ← change this to your actual .yml filename if different
               ref: context.ref.replace('refs/heads/', ''),
-              inputs: { chain_index: next }
+              inputs: {
+                chain_index: next,
+                max_runs: max
+              }
             });
-            console.log(`Dispatched chain run ${next}/20`);
+            console.log(`Dispatched chain run ${next}/${max}`);
