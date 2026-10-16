@@ -9,19 +9,18 @@
 # (locale, timezone, CSC country codes).
 #
 # Schedule: starts a chain once per day; each successful run immediately
-# dispatches the next until 5 runs complete in that 24h window.
+# dispatches the next until 20 runs complete in that 24h window.
 #
 # Use google_apis (userdebug), not google_apis_playstore.
 name: Samsung Chrome newscredo capture
-
 on:
   # Kick off the daily chain (UTC). Adjust hour if you prefer local time.
   schedule:
-    - cron: "0 6 * * *"          # 06:00 UTC every day → starts chain run 1/5
+    - cron: "0 6 * * *"          # 06:00 UTC every day → starts chain run 1/20
   workflow_dispatch:
     inputs:
       chain_index:
-        description: "Chain index within the daily batch (1–5). Leave 1 to start a full batch."
+        description: "Chain index within the daily batch (1–20). Leave 1 to start a full batch."
         required: false
         default: "1"
         type: string
@@ -32,19 +31,16 @@ on:
         required: false
         default: "1"
         type: string
-
 permissions:
   contents: read
   actions: write          # needed to dispatch the next chained run
-
 concurrency:
   # Allow chained runs to queue; cancel only duplicate manual pushes
   group: samsung-native-capture-${{ github.event.inputs.chain_index || '1' }}
   cancel-in-progress: false
-
 jobs:
   capture:
-    name: Galaxy S24 Ultra · run ${{ github.event.inputs.chain_index || '1' }}/5
+    name: Galaxy S24 Ultra · run ${{ github.event.inputs.chain_index || '1' }}/20
     runs-on: ubuntu-latest
     timeout-minutes: 55
     outputs:
@@ -53,34 +49,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Resolve chain index
         id: chain
         run: |
           IDX="${{ github.event.inputs.chain_index || '1' }}"
-          # clamp 1–5
-          if ! [[ "$IDX" =~ ^[1-5]$ ]]; then IDX=1; fi
+          # clamp 1–20
+          if ! [[ "$IDX" =~ ^([1-9]|1[0-9]|20)$ ]]; then IDX=1; fi
           NEXT=$((IDX + 1))
           echo "index=$IDX"   >> "$GITHUB_OUTPUT"
           echo "next=$NEXT"   >> "$GITHUB_OUTPUT"
-          echo "Chain index: $IDX / 5  (next would be $NEXT)"
-
+          echo "Chain index: $IDX / 20  (next would be $NEXT)"
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
-
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-
       - name: Make emulator scripts executable
         run: chmod +x scripts/emulator/*.sh
-
       - name: Boot Samsung-spoofed emulator and capture
         uses: reactivecircus/android-emulator-runner@v2
         env:
@@ -128,7 +119,6 @@ jobs:
             -prop ro.build.characteristics=phone
           pre-emulator-launch-script: bash scripts/emulator/patch-avd.sh
           script: bash scripts/emulator/spoof-and-capture.sh
-
       - name: Upload screenshot and identity dump
         if: always()
         uses: actions/upload-artifact@v4
@@ -137,15 +127,14 @@ jobs:
           path: artifacts/
           if-no-files-found: warn
           retention-days: 14
-
-      # Instantly start the next run in the chain (1→2→3→4→5)
+      # Instantly start the next run in the chain (1→2→…→20)
       - name: Dispatch next chained run
-        if: success() && steps.chain.outputs.index < 5
+        if: success() && steps.chain.outputs.index < 20
         uses: actions/github-script@v7
         with:
           script: |
             const next = '${{ steps.chain.outputs.next }}';
-            console.log(`Chain ${next}/5 — dispatching immediately…`);
+            console.log(`Chain ${next}/20 — dispatching immediately…`);
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -153,4 +142,4 @@ jobs:
               ref: context.ref.replace('refs/heads/', ''),
               inputs: { chain_index: next }
             });
-            console.log(`Dispatched chain run ${next}/5`);
+            console.log(`Dispatched chain run ${next}/20`);
