@@ -163,15 +163,15 @@ jobs:
           script: |
             const next = '${{ steps.chain.outputs.next }}';
             const max  = '${{ steps.chain.outputs.max }}';
-            console.log(`Chain ${next}/${max} — dispatching immediately…`);
+            console.log('Chain ' + next + '/' + max + ' - dispatching immediately...');
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'iphone-native-capture.yml',   # ← change this to your actual .yml filename if different
+              workflow_id: 'iphone-native-capture.yml',
               ref: context.ref.replace('refs/heads/', ''),
               inputs: {
                 chain_index: next,
                 max_runs: max
               }
             });
-            console.log(`Dispatched chain run ${next}/${max}`);
+            console.log('Dispatched chain run ' + next + '/' + max);
